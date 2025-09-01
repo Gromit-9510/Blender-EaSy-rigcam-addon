@@ -10,7 +10,6 @@ bl_info = {
     "doc_url": "https://github.com/Gromit-9510/Blender-EaSy-rigcam-addon",  
     "tracker_url": "https://github.com/Gromit-9510/Blender-EaSy-rigcam-addon/issues",  
 }
-}
 
 import bpy
 from bpy.types import Panel, Operator, PropertyGroup
@@ -211,10 +210,8 @@ class RIGCAM_OT_create_rig(Operator):
         camera_obj = context.active_object
         camera_obj.parent = rotation_empty
         
-        # 7. F (Light) - Parent: Camera
-        bpy.ops.object.light_add(type='SPOT', location=(0, 0, 0))
-        light_obj = context.active_object
-        light_obj.parent = camera_obj
+        # Set initial camera rotation to 0,0,0
+        camera_obj.rotation_euler = (0, 0, 0)
         
         # 이름 설정 및 Display Size 조정
         if final_name == "RigCam":
@@ -223,7 +220,6 @@ class RIGCAM_OT_create_rig(Operator):
             camera_empty.empty_display_size = 0.0001  # 0.01cm
             crane_empty.name = "Crane" 
             crane_empty.empty_display_size = 0.15  # 15cm
-            light_obj.name = "F"
             focus_empty.name = "Focus"
             position_empty.name = "Position"
             rotation_empty.name = "Rotation"
@@ -233,15 +229,12 @@ class RIGCAM_OT_create_rig(Operator):
             camera_empty.empty_display_size = 0.0001  # 0.01cm
             crane_empty.name = f"{final_name}_Crane"
             crane_empty.empty_display_size = 0.15  # 15cm
-            light_obj.name = f"{final_name}_F"
             focus_empty.name = f"{final_name}_Focus"
             position_empty.name = f"{final_name}_Position"
             rotation_empty.name = f"{final_name}_Rotation"
         
         # 컨스트레인트 추가
         limit_rot = crane_empty.constraints.new('LIMIT_ROTATION')
-        track_constraint = light_obj.constraints.new('TRACK_TO')
-        track_constraint.target = focus_empty
         
         # 커스텀 프로퍼티들 추가 (초기값 - 새 리그는 모두 0으로 시작)
         if final_name == "RigCam":
@@ -289,7 +282,7 @@ class RIGCAM_OT_create_rig(Operator):
             camera_empty[prop] = value
         
         # 모든 오브젝트를 컬렉션에 추가
-        rig_objects = [camera_obj, camera_empty, crane_empty, light_obj, focus_empty, position_empty, rotation_empty]
+        rig_objects = [camera_obj, camera_empty, crane_empty, focus_empty, position_empty, rotation_empty]
         for obj in rig_objects:
             for col in obj.users_collection:
                 col.objects.unlink(obj)
@@ -492,13 +485,13 @@ class RIGCAM_OT_delete_rig(Operator):
     
     def execute(self, context):
         if self.rig_name == "CAMERA":
-            components = ["Camera", "CAMERA", "Crane", "F", "Focus", "Position", "Rotation"]
+            components = ["Camera", "CAMERA", "Crane", "Focus", "Position", "Rotation"]
             collection_name = "RigCam_RigCam"
         else:
             base_name = self.rig_name.replace("_CAMERA", "")
             components = [
                 f"{base_name}_Camera", f"{base_name}_CAMERA", f"{base_name}_Crane", 
-                f"{base_name}_F", f"{base_name}_Focus", f"{base_name}_Position", f"{base_name}_Rotation"
+                f"{base_name}_Focus", f"{base_name}_Position", f"{base_name}_Rotation"
             ]
             collection_name = f"{base_name}_RigCam"
         
@@ -777,32 +770,36 @@ class RIGCAM_OT_focus_snap_selected(Operator):
         return {'FINISHED'}
 
 
-class RIGCAM_OT_toggle_light(Operator):
-    """라이트 온/오프"""
-    bl_idname = "rigcam.toggle_light"
-    bl_label = "Toggle Light"
-    bl_description = "Toggle rig light on/off"
+class RIGCAM_OT_focus_snap_cursor(Operator):
+    """Focus distance snap to 3D cursor"""
+    bl_idname = "rigcam.focus_snap_cursor"
+    bl_label = "Focus Snap to Cursor"
+    bl_description = "Set focus distance to 3D cursor location"
     
     def execute(self, context):
         active_rig = context.scene.rigcam_props.active_rig
+        camera_empty = bpy.data.objects.get(active_rig)
         
-        if active_rig == "CAMERA":
-            light_name = "F"
-        else:
-            light_name = active_rig.replace("_CAMERA", "_F")
-        
-        light_obj = bpy.data.objects.get(light_name)
-        
-        if not light_obj:
-            self.report({'ERROR'}, "Light not found!")
+        if not camera_empty:
+            self.report({'ERROR'}, "No active rig camera found!")
             return {'CANCELLED'}
         
-        light_obj.hide_viewport = not light_obj.hide_viewport
-        light_obj.hide_render = light_obj.hide_viewport
+        if active_rig == "CAMERA":
+            camera_name = "Camera"
+        else:
+            camera_name = active_rig.replace("_CAMERA", "_Camera")
         
-        status = "OFF" if light_obj.hide_viewport else "ON"
-        force_viewport_update(context)
-        self.report({'INFO'}, f"Light {status}")
+        camera_obj = bpy.data.objects.get(camera_name)
+        
+        if not camera_obj:
+            self.report({'ERROR'}, "Camera object not found!")
+            return {'CANCELLED'}
+        
+        cursor_loc = context.scene.cursor.location
+        distance = (camera_obj.matrix_world.translation - cursor_loc).length
+        set_custom_prop_and_update(camera_empty, "92.FocusDist", distance, context)
+        
+        self.report({'INFO'}, f"Focus distance set to cursor: {distance:.2f}m")
         return {'FINISHED'}
 
 
@@ -1165,53 +1162,9 @@ class RIGCAM_OT_delete_preset(Operator):
         return context.window_manager.invoke_confirm(self, event)
 
 
-class RIGCAM_PT_manager(Panel):
-    """리그 매니저 패널"""
-    bl_label = "Rig Manager"
-    bl_idname = "RIGCAM_PT_manager"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_category = "Rig Cam"
-    bl_options = {'DEFAULT_CLOSED'}
-    
-    def draw(self, context):
-        layout = self.layout
-        props = context.scene.rigcam_props
-        
-        row = layout.row()
-        row.operator("rigcam.create_rig", text="+ Create New Rig", icon='CAMERA_DATA')
-        
-        rig_cameras = get_rig_cameras()
-        
-        if rig_cameras:
-            layout.separator()
-            layout.label(text="Existing Rigs:")
-            
-            for rig_name in rig_cameras:
-                box = layout.box()
-                row = box.row(align=True)
-                
-                if props.active_rig == rig_name:
-                    row.label(text="●", icon='RADIOBUT_ON')
-                else:
-                    row.label(text="○", icon='RADIOBUT_OFF')
-                
-                switch_op = row.operator("rigcam.switch_camera", text=rig_name.replace("_CAMERA", ""))
-                switch_op.rig_name = rig_name
-                
-                delete_op = row.operator("rigcam.delete_rig", text="", icon='X')
-                delete_op.rig_name = rig_name
-        else:
-            layout.label(text="No rig cameras found", icon='INFO')
-            
-        if props.active_rig:
-            layout.separator()
-            layout.label(text=f"Active: {props.active_rig.replace('_CAMERA', '')}", icon='CAMERA_STEREO')
-
-
 class RIGCAM_PT_main_panel(Panel):
-    """메인 Rig Cam 패널"""
-    bl_label = "Rig Cam Controller"
+    """통합 Rig Cam 패널"""
+    bl_label = "Rig Cam"
     bl_idname = "RIGCAM_PT_main_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -1221,7 +1174,32 @@ class RIGCAM_PT_main_panel(Panel):
         layout = self.layout
         props = context.scene.rigcam_props
         
+        # Rig Management Section
+        management_box = layout.box()
+        management_header = management_box.row()
+        management_header.label(text="Rig Management", icon='CAMERA_DATA')
+        
+        management_row = management_header.row(align=True)
+        management_row.operator("rigcam.create_rig", text="+ New", icon='ADD')
+        
         rig_cameras = get_rig_cameras()
+        
+        if rig_cameras:
+            # Show existing rigs in a compact format
+            for rig_name in rig_cameras:
+                rig_row = management_box.row(align=True)
+                
+                if props.active_rig == rig_name:
+                    rig_row.label(text="●", icon='RADIOBUT_ON')
+                else:
+                    rig_row.label(text="○", icon='RADIOBUT_OFF')
+                
+                switch_op = rig_row.operator("rigcam.switch_camera", text=rig_name.replace("_CAMERA", ""))
+                switch_op.rig_name = rig_name
+                
+                delete_op = rig_row.operator("rigcam.delete_rig", text="", icon='X')
+                delete_op.rig_name = rig_name
+        
         if not rig_cameras:
             layout.label(text="No rig cameras found!", icon='INFO')
             layout.operator("rigcam.create_rig", text="Create First Rig", icon='ADD')
@@ -1229,26 +1207,6 @@ class RIGCAM_PT_main_panel(Panel):
         
         if not props.active_rig or props.active_rig not in rig_cameras:
             props.active_rig = rig_cameras[0]
-        
-        row = layout.row()
-        row.label(text="Active Rig:")
-        
-        nav_row = row.row(align=True)
-        nav_row.scale_x = 0.8
-        
-        current_idx = rig_cameras.index(props.active_rig) if props.active_rig in rig_cameras else 0
-        
-        if len(rig_cameras) > 1:
-            prev_idx = (current_idx - 1) % len(rig_cameras)
-            prev_op = nav_row.operator("rigcam.switch_camera", text="", icon='TRIA_LEFT')
-            prev_op.rig_name = rig_cameras[prev_idx]
-        
-        nav_row.label(text=props.active_rig.replace("_CAMERA", ""))
-        
-        if len(rig_cameras) > 1:
-            next_idx = (current_idx + 1) % len(rig_cameras)
-            next_op = nav_row.operator("rigcam.switch_camera", text="", icon='TRIA_RIGHT')
-            next_op.rig_name = rig_cameras[next_idx]
         
         camera_empty = bpy.data.objects.get(props.active_rig)
         if not camera_empty:
@@ -1262,11 +1220,6 @@ class RIGCAM_PT_main_panel(Panel):
         header = box.row()
         header.label(text="Crane Position", icon='EMPTY_AXIS')
         
-        # 라이트 토글
-        light_btn = header.column()
-        light_btn.scale_x = 1.5
-        light_btn.scale_y = 1.5
-        light_btn.operator("rigcam.toggle_light", text="", icon='LIGHT')
         
         # 스냅 버튼들
         snap_row = header.row(align=True)
@@ -1438,6 +1391,11 @@ class RIGCAM_PT_main_panel(Panel):
         focus_snap_btn.scale_x = 1.5
         focus_snap_btn.scale_y = 1.5
         focus_snap_btn.operator("rigcam.focus_snap_selected", text="", icon='RESTRICT_SELECT_OFF')
+        
+        focus_cursor_btn = focus_row.column()
+        focus_cursor_btn.scale_x = 1.5
+        focus_cursor_btn.scale_y = 1.5
+        focus_cursor_btn.operator("rigcam.focus_snap_cursor", text="", icon='PIVOT_CURSOR')
         
         # 락, 키프레임, F커브 편집
         controls = header.row(align=True)
@@ -1622,11 +1580,6 @@ class RIGCAM_PT_properties_panel(Panel):
         header = box.row()
         header.label(text="Crane Position", icon='EMPTY_AXIS')
 
-        # 라이트 토글
-        light_btn = header.column()
-        light_btn.scale_x = 1.5
-        light_btn.scale_y = 1.5
-        light_btn.operator("rigcam.toggle_light", text="", icon='LIGHT')
 
         # 스냅 버튼들
         snap_row = header.row(align=True)
@@ -1798,6 +1751,11 @@ class RIGCAM_PT_properties_panel(Panel):
         focus_snap_btn.scale_x = 1.5
         focus_snap_btn.scale_y = 1.5
         focus_snap_btn.operator("rigcam.focus_snap_selected", text="", icon='RESTRICT_SELECT_OFF')
+        
+        focus_cursor_btn = focus_row.column()
+        focus_cursor_btn.scale_x = 1.5
+        focus_cursor_btn.scale_y = 1.5
+        focus_cursor_btn.operator("rigcam.focus_snap_cursor", text="", icon='PIVOT_CURSOR')
 
         # 락, 키프레임, F커브 편집
         controls = header.row(align=True)
@@ -1908,7 +1866,7 @@ def register():
     bpy.utils.register_class(RIGCAM_OT_snap_eyedropper)
     bpy.utils.register_class(RIGCAM_OT_focus_eyedropper)
     bpy.utils.register_class(RIGCAM_OT_focus_snap_selected)
-    bpy.utils.register_class(RIGCAM_OT_toggle_light)
+    bpy.utils.register_class(RIGCAM_OT_focus_snap_cursor)
     bpy.utils.register_class(RIGCAM_OT_frame_jump)
     bpy.utils.register_class(RIGCAM_OT_edit_fcurve)
     bpy.utils.register_class(RIGCAM_OT_set_frame_step)
@@ -1919,7 +1877,6 @@ def register():
     bpy.utils.register_class(RIGCAM_OT_save_preset)
     bpy.utils.register_class(RIGCAM_OT_load_preset)
     bpy.utils.register_class(RIGCAM_OT_delete_preset)
-    bpy.utils.register_class(RIGCAM_PT_manager)
     bpy.utils.register_class(RIGCAM_PT_main_panel)
     bpy.utils.register_class(RIGCAM_PT_presets)
     bpy.utils.register_class(RIGCAM_PT_properties_panel)
@@ -1933,17 +1890,16 @@ def unregister():
     bpy.utils.unregister_class(RIGCAM_OT_switch_camera)
     bpy.utils.unregister_class(RIGCAM_OT_delete_rig)
     bpy.utils.unregister_class(RIGCAM_OT_snap_cursor)
-    bpy.utils.register_class(RIGCAM_OT_snap_selected)
+    bpy.utils.unregister_class(RIGCAM_OT_snap_selected)
     bpy.utils.unregister_class(RIGCAM_OT_snap_eyedropper)
     bpy.utils.unregister_class(RIGCAM_OT_focus_eyedropper)
     bpy.utils.unregister_class(RIGCAM_OT_focus_snap_selected)
-    bpy.utils.unregister_class(RIGCAM_OT_toggle_light)
+    bpy.utils.unregister_class(RIGCAM_OT_focus_snap_cursor)
     bpy.utils.unregister_class(RIGCAM_OT_keyframe_group)
     bpy.utils.unregister_class(RIGCAM_OT_keyframe_all)
     bpy.utils.unregister_class(RIGCAM_OT_save_preset)
     bpy.utils.unregister_class(RIGCAM_OT_load_preset)
     bpy.utils.unregister_class(RIGCAM_OT_delete_preset)
-    bpy.utils.unregister_class(RIGCAM_PT_manager)
     bpy.utils.unregister_class(RIGCAM_PT_main_panel)
     bpy.utils.unregister_class(RIGCAM_PT_presets)
     bpy.utils.unregister_class(RIGCAM_PT_properties_panel)
