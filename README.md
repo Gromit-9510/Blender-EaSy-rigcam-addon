@@ -16,7 +16,7 @@ A simple addon I created while working in Blender. Crane camera rig controller f
 
 **Requirements:** Blender 4.2 or higher
 
-1. Download `EaSyCaM_v1.py` from the [Releases](https://github.com/Gromit-9510/blender-rigcam-addon/releases) page
+1. Download `EaSy_Rig_Cam.py` from the [Releases](https://github.com/Gromit-9510/blender-rigcam-addon/releases) page
 2. Open Blender
 3. Go to **Edit → Preferences → Add-ons**
 4. Click **Install...** and select the downloaded `.py` file
